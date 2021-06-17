@@ -1,0 +1,12 @@
+
+go/tools/releasing/releasing
+
+.DS_Store
+Thumbs.db
+
+.tools/
+.idea/
+.vscode/
+*.iml
+*.so
+coverage.*

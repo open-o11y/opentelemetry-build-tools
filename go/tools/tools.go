@@ -32,32 +32,32 @@ const (
 	repoRootTag = ModuleTagName("repoRootTag")
 )
 
-type ModuleVersioningInfo struct {
+type ModuleVersioning struct {
 	ModSetMap ModuleSetMap
 	ModPathMap ModulePathMap
 	ModInfoMap ModuleInfoMap
 }
 
-func NewModuleVersioningInfo(versioningFilename string, repoRoot string) (ModuleVersioningInfo, error) {
-	var newBaseVersionStruct ModuleVersioningInfo
+func NewModuleVersioningInfo(versioningFilename string, repoRoot string) (ModuleVersioning, error) {
+	var newBaseVersionStruct ModuleVersioning
 
 	vCfg, _ := readVersioningFile(versioningFilename)
 
-	modSetMap, err := vCfg.BuildModuleSetsMap()
+	modSetMap, err := vCfg.buildModuleSetsMap()
 	if err != nil {
-		return ModuleVersioningInfo{}, fmt.Errorf("Error building module set map for NewModuleVersioningInfo: %v", err)
+		return ModuleVersioning{}, fmt.Errorf("Error building module set map for NewModuleVersioningInfo: %v", err)
 	}
 	newBaseVersionStruct.ModSetMap = modSetMap
 
-	modInfoMap, err := vCfg.BuildModuleMap()
+	modInfoMap, err := vCfg.buildModuleMap()
 	if err != nil {
-		return ModuleVersioningInfo{}, fmt.Errorf("Error building module info map for NewModuleVersioningInfo: %v", err)
+		return ModuleVersioning{}, fmt.Errorf("Error building module info map for NewModuleVersioningInfo: %v", err)
 	}
 	newBaseVersionStruct.ModInfoMap = modInfoMap
 
-	modPathMap, err := BuildModulePathMap(versioningFilename, repoRoot)
+	modPathMap, err := vCfg.BuildModulePathMap(repoRoot)
 	if err != nil {
-		return ModuleVersioningInfo{}, fmt.Errorf("Error building module path map for NewModuleVersioningInfo: %v", err)
+		return ModuleVersioning{}, fmt.Errorf("Error building module path map for NewModuleVersioningInfo: %v", err)
 	}
 	newBaseVersionStruct.ModPathMap = modPathMap
 
@@ -79,8 +79,8 @@ type ModuleSetMap map[string]ModuleSet
 
 // ModuleSet holds the version that the specified modules within the set will have.
 type ModuleSet struct {
-	Version string       `mapstructure:"version"`
-	Modules []ModulePath `mapstructure:"modules"`
+	Version	string       `mapstructure:"version"`
+	Modules	[]ModulePath `mapstructure:"modules"`
 }
 
 // ModulePath holds the module import path, such as "go.opentelemetry.io/otel".
@@ -129,23 +129,18 @@ func readVersioningFile(versioningFilename string) (versionConfig, error) {
 	return versionCfg, nil
 }
 
-// BuildModuleSetsMap creates a map with module set names as keys and ModuleSet structs as values.
-func (versionCfg versionConfig) BuildModuleSetsMap() (ModuleSetMap, error) {
+// buildModuleSetsMap creates a map with module set names as keys and ModuleSet structs as values.
+func (versionCfg versionConfig) buildModuleSetsMap() (ModuleSetMap, error) {
 	return versionCfg.ModuleSets, nil
 }
 
 // BuildModuleMap creates a map with module paths as keys and their moduleInfo as values
 // by creating and "reversing" a ModuleSetsMap.
-func (versionCfg versionConfig) BuildModuleMap() (ModuleInfoMap, error) {
-	modSetMap, err := versionCfg.BuildModuleSetsMap()
-	if err != nil {
-		return ModuleInfoMap{}, fmt.Errorf("error building module sets map: %v", err)
-	}
-
+func (versionCfg versionConfig) buildModuleMap() (ModuleInfoMap, error) {
 	modMap := make(ModuleInfoMap)
 	var modPath ModulePath
 
-	for setName, moduleSet := range modSetMap {
+	for setName, moduleSet := range versionCfg.ModuleSets {
 		for _, modPath = range moduleSet.Modules {
 			// Check if module has already been added to the map
 			if _, exists := modMap[modPath]; exists {
@@ -155,7 +150,7 @@ func (versionCfg versionConfig) BuildModuleMap() (ModuleInfoMap, error) {
 
 			// Check if module is in excluded modules section
 			if versionCfg.shouldExcludeModule(modPath) {
-				return nil, fmt.Errorf("Module %v is an excluded module and should not be versioned.", err)
+				return nil, fmt.Errorf("Module %v is an excluded module and should not be versioned.", modPath)
 			}
 			modMap[modPath] = ModuleInfo{setName, moduleSet.Version}
 		}
@@ -182,19 +177,8 @@ func (versionCfg versionConfig) getExcludedModules() excludedModulesSet {
 	return excludedModules
 }
 
-// BuildModuleSetsMap creates a map with module set names as keys and ModuleSet structs as values.
-func BuildModuleSetsMap(versioningFilename string) (ModuleSetMap, error) {
-	versionCfg, err := readVersioningFile(versioningFilename)
-	if err != nil {
-		return nil, fmt.Errorf("error building moduleSetsMap: %v", err)
-	}
-
-	return versionCfg.ModuleSets, nil
-}
-
 // BuildModulePathMap creates a map with module paths as keys and go.mod file paths as values.
-func BuildModulePathMap(versioningFilename string, root string) (ModulePathMap, error) {
-	// TODO: handle contrib repo
+func (versionCfg versionConfig) BuildModulePathMap(root string) (ModulePathMap, error) {
 	modPathMap := make(ModulePathMap)
 
 	findGoMod := func(filePath string, info fs.FileInfo, err error) error {
@@ -216,10 +200,7 @@ func BuildModulePathMap(versioningFilename string, root string) (ModulePathMap, 
 			modPath := ModulePath(modPathString)
 			modFilePath := ModuleFilePath(filePath)
 
-			excludedModules, err := getExcludedModules(versioningFilename)
-			if err != nil {
-				return fmt.Errorf("could not get excluded modules: %v", err)
-			}
+			excludedModules := versionCfg.getExcludedModules()
 			if _, shouldExclude := excludedModules[ModulePath(modPath)]; !shouldExclude {
 				modPathMap[modPath] = modFilePath
 			}
@@ -234,89 +215,14 @@ func BuildModulePathMap(versioningFilename string, root string) (ModulePathMap, 
 	return modPathMap, nil
 }
 
-// BuildModuleMap creates a map with module paths as keys and their moduleInfo as values
-// by creating and "reversing" a ModuleSetsMap.
-func BuildModuleMap(versioningFilename string) (ModuleInfoMap, error) {
-	modSetMap, err := BuildModuleSetsMap(versioningFilename)
-	if err != nil {
-		return ModuleInfoMap{}, err
-	}
-
-	modMap := make(ModuleInfoMap)
-	var modPath ModulePath
-
-	for setName, moduleSet := range modSetMap {
-		for _, modPath = range moduleSet.Modules {
-			// Check if module has already been added to the map
-			if _, exists := modMap[modPath]; exists {
-				return nil, fmt.Errorf("Module %v exists more than once. Exists in sets %v and %v.",
-					modPath, modMap[modPath].ModuleSetName, setName)
-			}
-			excludedModules, err := getExcludedModules(versioningFilename)
-			if err != nil {
-				return nil, fmt.Errorf("could not get excluded modules: %v", err)
-			}
-			if _, exists := excludedModules[modPath]; exists {
-				return nil, fmt.Errorf("Module %v is an excluded module and should not be versioned.", err)
-			}
-			modMap[modPath] = ModuleInfo{setName, moduleSet.Version}
-		}
-	}
-
-	return modMap, nil
-}
-
-// getExcludedModules returns a .
-func getExcludedModules(versioningFilename string) (excludedModulesSet, error) {
-	versionCfg, err := readVersioningFile(versioningFilename)
-	if err != nil {
-		return nil, fmt.Errorf("error getting excluded modules: %v", err)
-	}
-
-	excludedModules := make(excludedModulesSet)
-	// add all excluded modules to the excludedModulesSet
-	for _, mod := range versionCfg.ExcludedModules {
-		excludedModules[mod] = struct{}{}
-	}
-
-	return excludedModules, nil
-}
-
-// VersionsAndModulesToUpdate returns the specified module set's version string and each of its module's
-// module import path and module tag name used for Git tagging.
-func VersionsAndModulesToUpdate(versioningFilename string,
-	modSetName string,
-	repoRoot string) (string,
-	[]ModulePath,
-	[]ModuleTagName,
-	error) {
-	modSetsMap, err := BuildModuleSetsMap(versioningFilename)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("could not build module sets map: %v", err)
-	}
-
-	modSet, exists := modSetsMap[modSetName]
+// GetModuleSet fetches the ModuleSet info for a module set with input name
+func (modVersioning ModuleVersioning) GetModuleSet(modSetName string) (ModuleSet, error) {
+	modSet, exists := modVersioning.ModSetMap[modSetName]
 	if !exists {
-		return "", nil, nil, fmt.Errorf("could not find module set %v in versioning file", modSetName)
+		return ModuleSet{}, fmt.Errorf("could not find module set %v in versioning file", modSetName)
 	}
 
-	modPathMap, err := BuildModulePathMap(versioningFilename, repoRoot)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("unable to build module path map: %v", err)
-	}
-
-	newVersion := modSet.Version
-	modPaths := modSet.Modules
-	modFilePaths, err := modulePathsToFilePaths(modPaths, modPathMap)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("could not convert module paths to file paths: %v", err)
-	}
-	modTagNames, err := moduleFilePathsToTagNames(modFilePaths, repoRoot)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("could not convert module file paths to tag names: %v", err)
-	}
-
-	return newVersion, modPaths, modTagNames, nil
+	return modSet, nil
 }
 
 // CombineModuleTagNamesAndVersion combines a slice of ModuleTagNames with the version number and returns
@@ -336,6 +242,20 @@ func CombineModuleTagNamesAndVersion(modTagNames []ModuleTagName, version string
 	return modFullTags
 }
 
+func ModulePathsToTagNames(modPaths []ModulePath, modPathMap ModulePathMap, repoRoot string) ([]ModuleTagName, error) {
+	modFilePaths, err := modulePathsToFilePaths(modPaths, modPathMap)
+	if err != nil {
+		return  nil, fmt.Errorf("could not convert module paths to file paths: %v", err)
+	}
+
+	modTagNames, err := moduleFilePathsToTagNames(modFilePaths, repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("could not convert module file paths to tag names: %v", err)
+	}
+
+	return modTagNames, nil
+}
+
 // modulePathsToFilePaths returns a list of absolute file paths from a list of module's import paths.
 func modulePathsToFilePaths(modPaths []ModulePath, modPathMap ModulePathMap) ([]ModuleFilePath, error) {
 	var modFilePaths []ModuleFilePath
@@ -347,9 +267,9 @@ func modulePathsToFilePaths(modPaths []ModulePath, modPathMap ModulePathMap) ([]
 	return modFilePaths, nil
 }
 
-// ModuleFilePathToTagName returns the module tag names of an input ModuleFilePath
+// moduleFilePathToTagName returns the module tag names of an input ModuleFilePath
 // by removing the repoRoot prefix from the ModuleFilePath.
-func ModuleFilePathToTagName(modFilePath ModuleFilePath, repoRoot string) (ModuleTagName, error) {
+func moduleFilePathToTagName(modFilePath ModuleFilePath, repoRoot string) (ModuleTagName, error) {
 	modTagNameWithGoMod := strings.TrimPrefix(string(modFilePath), repoRoot+"/")
 	modTagName := strings.TrimSuffix(modTagNameWithGoMod, "/go.mod")
 
@@ -371,7 +291,7 @@ func moduleFilePathsToTagNames(modFilePaths []ModuleFilePath, repoRoot string) (
 	var modNames []ModuleTagName
 
 	for _, modFilePath := range modFilePaths {
-		modTagName, err := ModuleFilePathToTagName(modFilePath, repoRoot)
+		modTagName, err := moduleFilePathToTagName(modFilePath, repoRoot)
 		if err != nil {
 			return nil, fmt.Errorf("could not convert module file path to tag name: %v", err)
 		}

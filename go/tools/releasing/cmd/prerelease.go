@@ -52,7 +52,7 @@ var prereleaseCmd = &cobra.Command{
 			log.Fatalf("unable to change to repo root: %v", err)
 		}
 
-		p, err := newPrerelease(versioningFile, moduleSet, repoRoot)
+		p, err := newPrerelease(versioningFile, moduleSetName, repoRoot)
 		if err != nil {
 			log.Fatalf("Error creating new prerelease struct: %v", err)
 		}
@@ -125,32 +125,34 @@ func init() {
 }
 
 type prerelease struct {
-	tools.ModuleVersioningInfo
-	modSetToUpdate string
-	repoRoot       string
-	newVersion     string
-	modPaths       []tools.ModulePath
-	modTagNames    []tools.ModuleTagName
+	tools.ModuleVersioning
+	modSetName  string
+	repoRoot    string
+	newVersion  string
+	modPaths    []tools.ModulePath
+	modTagNames []tools.ModuleTagName
 }
 
 func newPrerelease(versioningFilename, modSetToUpdate, repoRoot string) (prerelease, error) {
-	baseVersionStruct, err := tools.NewModuleVersioningInfo(versioningFile, repoRoot)
+	baseVersionStruct, err := tools.NewModuleVersioningInfo(versioningFilename, repoRoot)
 	if err != nil {
-		log.Fatalf("unable to load baseVersionStruct: %v", err)
+		return prerelease{}, fmt.Errorf("unable to load baseVersionStruct: %v", err)
 	}
 
 	// get new version and mod tags to update
-	newVersion, newModPaths, newModTagNames, err := tools.VersionsAndModulesToUpdate(versioningFile, moduleSet, repoRoot)
+	modSet, err := baseVersionStruct.GetModuleSet(modSetToUpdate)
 	if err != nil {
-		log.Fatalf("unable to get modules to update: %v", err)
+		return prerelease{}, fmt.Errorf("unable to retrieve module set info: %v", err)
 	}
 
+	newModTagNames, err := tools.ModulePathsToTagNames(modSet.Modules, baseVersionStruct.ModPathMap, repoRoot)
+
 	return prerelease{
-		ModuleVersioningInfo: baseVersionStruct,
-		modSetToUpdate:       moduleSet,
-		newVersion:           newVersion,
-		modPaths:             newModPaths,
-		modTagNames:          newModTagNames,
+		ModuleVersioning: baseVersionStruct,
+		modSetName:       modSetToUpdate,
+		newVersion:       modSet.Version,
+		modPaths:         modSet.Modules,
+		modTagNames:      newModTagNames,
 	}, nil
 }
 
@@ -189,7 +191,7 @@ func (p prerelease) verifyWorkingTreeClean() error {
 }
 
 func (p prerelease) createPrereleaseBranch(fromExistingBranch string) error {
-	branchNameElements := []string{"pre_release", p.modSetToUpdate, p.newVersion}
+	branchNameElements := []string{"pre_release", p.modSetName, p.newVersion}
 	branchName := strings.Join(branchNameElements, "_")
 	fmt.Printf("git checkout -b %v %v\n", branchName, fromExistingBranch)
 	cmd := exec.Command("git", "checkout", "-b", branchName, fromExistingBranch)

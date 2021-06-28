@@ -43,7 +43,7 @@ var verifyCmd = &cobra.Command{
 `,
 	PreRun: func(cmd *cobra.Command, args []string) {
 		flags := cmd.InheritedFlags()
-		flags.SetAnnotation("module-set", cobra.BashCompOneRequiredFlag, []string{"false"})
+		flags.SetAnnotation("module-set-name", cobra.BashCompOneRequiredFlag, []string{"false"})
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Using versioning file", versioningFile)
@@ -82,17 +82,17 @@ func init() {
 }
 
 type verification struct {
-	tools.ModuleVersioningInfo
+	tools.ModuleVersioning
 }
 
 func newVerification(versioningFilename, repoRoot string) (verification, error) {
-	baseVersionStruct, err := tools.NewModuleVersioningInfo(versioningFile, repoRoot)
+	baseVersionStruct, err := tools.NewModuleVersioningInfo(versioningFilename, repoRoot)
 	if err != nil {
 		return verification{}, fmt.Errorf("unable to load myBaseVersionStruct: %v", err)
 	}
 
 	return verification{
-		ModuleVersioningInfo: baseVersionStruct,
+		ModuleVersioning: baseVersionStruct,
 	}, nil
 }
 

@@ -29,7 +29,7 @@ import (
 
 var (
 	cfgFile        string
-	moduleSet      string
+	moduleSetName  string
 	versioningFile string
 )
 
@@ -64,10 +64,10 @@ func init() {
 			fmt.Sprintf("%v.%v", defaultVersionsConfigName, defaultVersionsConfigType))
 	}
 
-	rootCmd.PersistentFlags().StringVarP(&moduleSet, "module-set", "m", "",
+	rootCmd.PersistentFlags().StringVarP(&moduleSetName, "module-set-name", "m", "",
 		"Name of module set whose version is being changed. Must be listed in the module set versioning YAML.",
 	)
-	rootCmd.MarkPersistentFlagRequired("module-set")
+	rootCmd.MarkPersistentFlagRequired("module-set-name")
 }
 
 // initConfig reads in config file and ENV variables if set.

@@ -51,7 +51,7 @@ var tagCmd = &cobra.Command{
 			log.Fatalf("unable to change to repo root: %v", err)
 		}
 
-		t, err := newTagger(versioningFile, moduleSet, repoRoot, commitHash, deleteModuleSetTags)
+		t, err := newTagger(versioningFile, moduleSetName, repoRoot, commitHash, deleteModuleSetTags)
 		if err != nil {
 			log.Fatalf("Error creating new tagger struct: %v", err)
 		}

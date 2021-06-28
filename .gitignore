@@ -1,0 +1,12 @@
+
+../opentelemetry-go/releasing
+
+.DS_Store
+Thumbs.db
+
+.tools/
+.idea/
+.vscode/
+*.iml
+*.so
+coverage.*

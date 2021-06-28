@@ -1,5 +1,5 @@
 
-go/tools/releasing/releasing
+../opentelemetry-go/releasing
 
 .DS_Store
 Thumbs.db

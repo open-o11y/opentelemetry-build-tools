@@ -17,12 +17,12 @@ package cmd
 import (
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 
-	tools "go.opentelemetry.io/tools"
+	"go.opentelemetry.io/tools"
 )
 
 var (
@@ -44,37 +44,31 @@ var tagCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("tag called")
+		fmt.Println("Using versioning file", versioningFile)
 
-		coreRepoRoot, err := tools.FindRepoRoot()
+		repoRoot, err := tools.ChangeToRepoRoot()
 		if err != nil {
-			log.Fatalf("unable to find repo root: %v", err)
+			log.Fatalf("unable to change to repo root: %v", err)
 		}
 
-		fmt.Println("Changing to root directory...")
-		os.Chdir(coreRepoRoot)
-
-		// get new version and mod tags to update
-		newVersion, _, newModTagNames, err := tools.VersionsAndModulesToUpdate(versioningFile, moduleSet, coreRepoRoot)
+		t, err := newTagger(versioningFile, moduleSet, repoRoot, commitHash)
 		if err != nil {
-			log.Fatalf("unable to get modules to update: %v", err)
+			log.Fatalf("Error creating new tagger struct: %v", err)
 		}
 
-		// if delete-module-set-tags was specified, then delete all newModTagNames
-		// whose versions match the one in the versioning file
+		// if delete-module-set-tags is specified, then delete all newModTagNames
+		// whose versions match the one in the versioning file. Otherwise, tag all
+		// modules in the given set.
 		if deleteModuleSetTags {
-			modFullTagsToDelete := tools.CombineModuleTagNamesAndVersion(newModTagNames, newVersion)
-
-			if err := deleteTags(modFullTagsToDelete); err != nil {
-				log.Fatalf("unable to delete module tags: %v", err)
+			if err := t.deleteModuleSetTags(); err != nil {
+				log.Fatalf("Error deleting tags for the specified module set: %v", err)
 			}
 
 			fmt.Println("Successfully deleted module tags")
-			os.Exit(0)
-		}
-
-		if err := tagAllModules(newVersion, newModTagNames, commitHash); err != nil {
-			log.Fatalf("unable to tag modules: %v", err)
+		} else {
+			if err := t.tagAllModules(); err != nil {
+				log.Fatalf("unable to tag modules: %v", err)
+			}
 		}
 	},
 }
@@ -95,9 +89,66 @@ func init() {
 	)
 }
 
+type tagger struct {
+	prerelease
+	commitHash string
+}
+
+func newTagger(versioningFilename, modSetToUpdate, repoRoot, hash string) (tagger, error) {
+	prereleaseStruct, err := newPrerelease(versioningFilename, modSetToUpdate, repoRoot)
+	if err != nil {
+		return tagger{}, fmt.Errorf("error creating prerelease struct: %v", err)
+	}
+
+	fullCommitHash, err := getFullCommitHash(hash)
+	if err != nil {
+		return tagger{}, fmt.Errorf("could not get full commit hash of given hash %v: %v", hash, err)
+	}
+
+	return tagger{
+		prerelease: prereleaseStruct,
+		commitHash: fullCommitHash,
+	}, nil
+}
+
+func getFullCommitHash(hash string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--quiet", "--verify", hash)
+
+	// output stores the complete SHA1 of the commit hash
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("could not retrieve commit hash %v: %v", hash, err)
+	}
+
+	SHA := strings.TrimSpace(string(output))
+
+	cmd = exec.Command("git", "merge-base", SHA, "HEAD")
+	// output should match SHA
+	output, err = cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("command 'git merge-base %v HEAD' failed: %v", SHA, err)
+	}
+	if strings.TrimSpace(string(output)) != SHA {
+		return "", fmt.Errorf("commit %v (complete SHA: %v) not found on this branch "+
+			"or not the most recent commit", hash, SHA)
+	}
+
+	return SHA, nil
+}
+
+func (t tagger) deleteModuleSetTags() error {
+	modFullTagsToDelete := tools.CombineModuleTagNamesAndVersion(t.modTagNames, t.newVersion)
+
+	if err := t.deleteTags(modFullTagsToDelete); err != nil {
+		return fmt.Errorf("unable to delete module tags: %v", err)
+	}
+
+	return nil
+}
+
 // deleteTags removes the tags created for a certain version. This func is called to remove newly
 // created tags if the new module tagging fails.
-func deleteTags(modFullTags []string) error {
+func (t tagger) deleteTags(modFullTags []string) error {
 	for _, modFullTag := range modFullTags {
 		fmt.Printf("Deleting tag %v\n", modFullTag)
 		cmd := exec.Command("git", "tag", "-d", modFullTag)
@@ -108,22 +159,22 @@ func deleteTags(modFullTags []string) error {
 	return nil
 }
 
-func tagAllModules(version string, modTagNames []tools.ModuleTagName, commitHash string) error {
-	modFullTags := tools.CombineModuleTagNamesAndVersion(modTagNames, version)
+func (t tagger) tagAllModules() error {
+	modFullTags := tools.CombineModuleTagNamesAndVersion(t.modTagNames, t.newVersion)
 
 	var addedFullTags []string
 
-	fmt.Printf("Tagging commit %v:\n", commitHash)
+	fmt.Printf("Tagging commit %v:\n", t.commitHash)
 
 	for _, newFullTag := range modFullTags {
 		fmt.Printf("%v\n", newFullTag)
 
-		cmd := exec.Command("git", "tag", "-a", newFullTag, "-s", "-m", "Version "+newFullTag, commitHash)
+		cmd := exec.Command("git", "tag", "-a", newFullTag, "-s", "-m", "Version "+newFullTag, t.commitHash)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			fmt.Println("error creating a tag, removing all newly created tags...")
 
 			// remove newly created tags to prevent inconsistencies
-			if delTagsErr := deleteTags(addedFullTags); delTagsErr != nil {
+			if delTagsErr := t.deleteTags(addedFullTags); delTagsErr != nil {
 				return fmt.Errorf("git tag failed for %v:\n%v (%v).\nCould not remove all tags: %v",
 					newFullTag, string(output), err, delTagsErr,
 				)

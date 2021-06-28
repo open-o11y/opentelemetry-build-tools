@@ -32,6 +32,38 @@ const (
 	repoRootTag = ModuleTagName("repoRootTag")
 )
 
+type ModuleVersioningInfo struct {
+	ModSetMap ModuleSetMap
+	ModPathMap ModulePathMap
+	ModInfoMap ModuleInfoMap
+}
+
+func NewModuleVersioningInfo(versioningFilename string, repoRoot string) (ModuleVersioningInfo, error) {
+	var newBaseVersionStruct ModuleVersioningInfo
+
+	vCfg, _ := readVersioningFile(versioningFilename)
+
+	modSetMap, err := vCfg.BuildModuleSetsMap()
+	if err != nil {
+		return ModuleVersioningInfo{}, fmt.Errorf("Error building module set map for NewModuleVersioningInfo: %v", err)
+	}
+	newBaseVersionStruct.ModSetMap = modSetMap
+
+	modInfoMap, err := vCfg.BuildModuleMap()
+	if err != nil {
+		return ModuleVersioningInfo{}, fmt.Errorf("Error building module info map for NewModuleVersioningInfo: %v", err)
+	}
+	newBaseVersionStruct.ModInfoMap = modInfoMap
+
+	modPathMap, err := BuildModulePathMap(versioningFilename, repoRoot)
+	if err != nil {
+		return ModuleVersioningInfo{}, fmt.Errorf("Error building module path map for NewModuleVersioningInfo: %v", err)
+	}
+	newBaseVersionStruct.ModPathMap = modPathMap
+
+	return newBaseVersionStruct, nil
+}
+
 // versionConfig is needed to parse the versions.yaml file with viper.
 type versionConfig struct {
 	ModuleSets      ModuleSetMap `mapstructure:"module-sets"`
@@ -75,6 +107,91 @@ type ModulePathMap map[ModulePath]ModuleFilePath
 // For example, the opentelemetry-go/sdk/metric/go.mod file will have a ModuleTagName "sdk/metric".
 type ModuleTagName string
 
+// readVersioningFile reads in a versioning file (typically given as versions.yaml) and returns
+// a versionConfig struct.
+func readVersioningFile(versioningFilename string) (versionConfig, error) {
+	viper.AddConfigPath(filepath.Dir(versioningFilename))
+	fileExt := filepath.Ext(versioningFilename)
+	fileBaseWithoutExt := strings.TrimSuffix(filepath.Base(versioningFilename), fileExt)
+	viper.SetConfigName(fileBaseWithoutExt)
+	viper.SetConfigType(strings.TrimPrefix(fileExt, "."))
+
+	var versionCfg versionConfig
+
+	if err := viper.ReadInConfig(); err != nil {
+		return versionConfig{}, fmt.Errorf("error reading versionsConfig file: %s", err)
+	}
+
+	if err := viper.Unmarshal(&versionCfg); err != nil {
+		return versionConfig{}, fmt.Errorf("unable to unmarshal versionsConfig: %s", err)
+	}
+
+	return versionCfg, nil
+}
+
+// BuildModuleSetsMap creates a map with module set names as keys and ModuleSet structs as values.
+func (versionCfg versionConfig) BuildModuleSetsMap() (ModuleSetMap, error) {
+	return versionCfg.ModuleSets, nil
+}
+
+// BuildModuleMap creates a map with module paths as keys and their moduleInfo as values
+// by creating and "reversing" a ModuleSetsMap.
+func (versionCfg versionConfig) BuildModuleMap() (ModuleInfoMap, error) {
+	modSetMap, err := versionCfg.BuildModuleSetsMap()
+	if err != nil {
+		return ModuleInfoMap{}, fmt.Errorf("error building module sets map: %v", err)
+	}
+
+	modMap := make(ModuleInfoMap)
+	var modPath ModulePath
+
+	for setName, moduleSet := range modSetMap {
+		for _, modPath = range moduleSet.Modules {
+			// Check if module has already been added to the map
+			if _, exists := modMap[modPath]; exists {
+				return nil, fmt.Errorf("Module %v exists more than once. Exists in sets %v and %v.",
+					modPath, modMap[modPath].ModuleSetName, setName)
+			}
+
+			// Check if module is in excluded modules section
+			if versionCfg.shouldExcludeModule(modPath) {
+				return nil, fmt.Errorf("Module %v is an excluded module and should not be versioned.", err)
+			}
+			modMap[modPath] = ModuleInfo{setName, moduleSet.Version}
+		}
+	}
+
+	return modMap, nil
+}
+
+func (versionCfg versionConfig) shouldExcludeModule(modPath ModulePath) bool {
+	excludedModules := versionCfg.getExcludedModules()
+	_, exists := excludedModules[modPath]
+
+	return exists
+}
+
+// getExcludedModules returns a .
+func (versionCfg versionConfig) getExcludedModules() excludedModulesSet {
+	excludedModules := make(excludedModulesSet)
+	// add all excluded modules to the excludedModulesSet
+	for _, mod := range versionCfg.ExcludedModules {
+		excludedModules[mod] = struct{}{}
+	}
+
+	return excludedModules
+}
+
+// BuildModuleSetsMap creates a map with module set names as keys and ModuleSet structs as values.
+func BuildModuleSetsMap(versioningFilename string) (ModuleSetMap, error) {
+	versionCfg, err := readVersioningFile(versioningFilename)
+	if err != nil {
+		return nil, fmt.Errorf("error building moduleSetsMap: %v", err)
+	}
+
+	return versionCfg.ModuleSets, nil
+}
+
 // BuildModulePathMap creates a map with module paths as keys and go.mod file paths as values.
 func BuildModulePathMap(versioningFilename string, root string) (ModulePathMap, error) {
 	// TODO: handle contrib repo
@@ -117,54 +234,6 @@ func BuildModulePathMap(versioningFilename string, root string) (ModulePathMap, 
 	return modPathMap, nil
 }
 
-// readVersioningFile reads in a versioning file (typically given as versions.yaml) and returns
-// a versionConfig struct.
-func readVersioningFile(versioningFilename string) (versionConfig, error) {
-	viper.AddConfigPath(filepath.Dir(versioningFilename))
-	fileExt := filepath.Ext(versioningFilename)
-	fileBaseWithoutExt := strings.TrimSuffix(filepath.Base(versioningFilename), fileExt)
-	viper.SetConfigName(fileBaseWithoutExt)
-	viper.SetConfigType(strings.TrimPrefix(fileExt, "."))
-
-	var versionCfg versionConfig
-
-	if err := viper.ReadInConfig(); err != nil {
-		return versionConfig{}, fmt.Errorf("error reading versionsConfig file: %s", err)
-	}
-
-	if err := viper.Unmarshal(&versionCfg); err != nil {
-		return versionConfig{}, fmt.Errorf("unable to unmarshal versionsConfig: %s", err)
-	}
-
-	return versionCfg, nil
-}
-
-// BuildModuleSetsMap creates a map with module set names as keys and ModuleSet structs as values.
-func BuildModuleSetsMap(versioningFilename string) (ModuleSetMap, error) {
-	versionCfg, err := readVersioningFile(versioningFilename)
-	if err != nil {
-		return nil, fmt.Errorf("error building moduleSetsMap: %v", err)
-	}
-
-	return versionCfg.ModuleSets, nil
-}
-
-// getExcludedModules returns a .
-func getExcludedModules(versioningFilename string) (excludedModulesSet, error) {
-	versionCfg, err := readVersioningFile(versioningFilename)
-	if err != nil {
-		return nil, fmt.Errorf("error getting excluded modules: %v", err)
-	}
-
-	excludedModules := make(excludedModulesSet)
-	// add all excluded modules to the excludedModulesSet
-	for _, mod := range versionCfg.ExcludedModules {
-		excludedModules[mod] = struct{}{}
-	}
-
-	return excludedModules, nil
-}
-
 // BuildModuleMap creates a map with module paths as keys and their moduleInfo as values
 // by creating and "reversing" a ModuleSetsMap.
 func BuildModuleMap(versioningFilename string) (ModuleInfoMap, error) {
@@ -195,6 +264,22 @@ func BuildModuleMap(versioningFilename string) (ModuleInfoMap, error) {
 	}
 
 	return modMap, nil
+}
+
+// getExcludedModules returns a .
+func getExcludedModules(versioningFilename string) (excludedModulesSet, error) {
+	versionCfg, err := readVersioningFile(versioningFilename)
+	if err != nil {
+		return nil, fmt.Errorf("error getting excluded modules: %v", err)
+	}
+
+	excludedModules := make(excludedModulesSet)
+	// add all excluded modules to the excludedModulesSet
+	for _, mod := range versionCfg.ExcludedModules {
+		excludedModules[mod] = struct{}{}
+	}
+
+	return excludedModules, nil
 }
 
 // VersionsAndModulesToUpdate returns the specified module set's version string and each of its module's
@@ -331,4 +416,16 @@ func FindRepoRoot() (string, error) {
 
 		return dir, nil
 	}
+}
+
+func ChangeToRepoRoot() (string, error) {
+	repoRoot, err := FindRepoRoot()
+	if err != nil {
+		return "", fmt.Errorf("unable to change to repo root: %v", err)
+	}
+
+	fmt.Println("Changing to root directory...")
+	os.Chdir(repoRoot)
+
+	return repoRoot, nil
 }

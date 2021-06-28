@@ -24,7 +24,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	tools "go.opentelemetry.io/tools"
+	"go.opentelemetry.io/tools"
 )
 
 var (

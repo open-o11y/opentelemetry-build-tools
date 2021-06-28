@@ -23,7 +23,7 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 
-	tools "go.opentelemetry.io/tools"
+	"go.opentelemetry.io/tools"
 )
 
 const (
@@ -48,35 +48,25 @@ var verifyCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Using versioning file", versioningFile)
 
-		modSetMap, err := tools.BuildModuleSetsMap(versioningFile)
-		if err != nil {
-			log.Fatalf("unable to build module sets map: %v", err)
-		}
-
-		modInfoMap, err := tools.BuildModuleMap(versioningFile)
-		if err != nil {
-			log.Fatalf("unable to build module info map: %v", err)
-		}
-
-		coreRepoRoot, err := tools.FindRepoRoot()
+		repoRoot, err := tools.FindRepoRoot()
 		if err != nil {
 			log.Fatalf("unable to find repo root: %v", err)
 		}
 
-		modPathMap, err := tools.BuildModulePathMap(versioningFile, coreRepoRoot)
+		v, err := newVerification(versioningFile, repoRoot)
 		if err != nil {
-			log.Fatalf("unable to build module path map: %v", err)
+			log.Fatalf("Error creating new verification struct: %v", err)
 		}
 
-		if err = verifyAllModulesInSet(modPathMap, modInfoMap); err != nil {
+		if err = v.verifyAllModulesInSet(); err != nil {
 			log.Fatalf("verifyAllModulesInSet failed: %v", err)
 		}
 
-		if err = verifyVersions(modSetMap); err != nil {
+		if err = v.verifyVersions(); err != nil {
 			log.Fatalf("verifyVersions failed: %v", err)
 		}
 
-		if err = verifyDependencies(modInfoMap, modPathMap); err != nil {
+		if err = v.verifyDependencies(); err != nil {
 			log.Fatalf("verifyDependencies failed: %v", err)
 		}
 
@@ -91,20 +81,36 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 }
 
+type verification struct {
+	tools.ModuleVersioningInfo
+}
+
+func newVerification(versioningFilename, repoRoot string) (verification, error) {
+	baseVersionStruct, err := tools.NewModuleVersioningInfo(versioningFile, repoRoot)
+	if err != nil {
+		return verification{}, fmt.Errorf("unable to load myBaseVersionStruct: %v", err)
+	}
+
+	return verification{
+		ModuleVersioningInfo: baseVersionStruct,
+	}, nil
+}
+
 // verifyAllModulesInSet checks that every module (as defined by a go.mod file) is contained in exactly one module set.
-func verifyAllModulesInSet(modPathMap tools.ModulePathMap, modInfoMap tools.ModuleInfoMap) error {
+func (v verification) verifyAllModulesInSet() error {
+
 	// Note: This could be simplified by doing a set comparison between the keys in modInfoMap
 	// and the values of modulePathMap.
-	for modPath, modFilePath := range modPathMap {
-		if _, exists := modInfoMap[modPath]; !exists {
+	for modPath, modFilePath := range v.ModPathMap {
+		if _, exists := v.ModInfoMap[modPath]; !exists {
 			return fmt.Errorf("Module %v (defined in %v) is not contained in any module set.",
 				modPath, string(modFilePath),
 			)
 		}
 	}
 
-	for modPath, modInfo := range modInfoMap {
-		if _, exists := modPathMap[modPath]; !exists {
+	for modPath, modInfo := range v.ModInfoMap {
+		if _, exists := v.ModPathMap[modPath]; !exists {
 			// TODO: handle contrib repo
 			return fmt.Errorf("Module %v in module set %v does not exist in the core repo.",
 				modPath, modInfo.ModuleSetName,
@@ -118,12 +124,12 @@ func verifyAllModulesInSet(modPathMap tools.ModulePathMap, modInfoMap tools.Modu
 }
 
 // verifyVersions checks that module set versions conform to versioning semantics.
-func verifyVersions(modSetMap tools.ModuleSetMap) error {
+func (v verification) verifyVersions() error {
 	// setMajorVersions keeps track of all sets' major versions, used to check for multiple sets
 	// with the same non-zero major version.
 	setMajorVersions := make(map[string]string)
 
-	for modSetName, modSet := range modSetMap {
+	for modSetName, modSet := range v.ModSetMap {
 		// Check that module set versions conform to semver semantics
 		if !semver.IsValid(modSet.Version) {
 			return fmt.Errorf("Module set %v has invalid version string: %v",
@@ -135,7 +141,7 @@ func verifyVersions(modSetMap tools.ModuleSetMap) error {
 			// Check that no more than one module exists for any given non-zero major version
 			modSetVersionMajor := semver.Major(modSet.Version)
 			if prevModSetName, exists := setMajorVersions[modSetVersionMajor]; exists {
-				prevModSet := modSetMap[prevModSetName]
+				prevModSet := v.ModSetMap[prevModSetName]
 				return fmt.Errorf("Multiple module sets have the same major version (%v): "+
 					"%v (version %v) and %v (version %v)",
 					modSetVersionMajor,
@@ -153,7 +159,10 @@ func verifyVersions(modSetMap tools.ModuleSetMap) error {
 }
 
 // verifyDependencies checks that dependencies between modules conform to versioning semantics.
-func verifyDependencies(modInfoMap tools.ModuleInfoMap, modPathMap tools.ModulePathMap) error {
+func (v verification) verifyDependencies() error {
+	modInfoMap := v.ModInfoMap
+	modPathMap := v.ModPathMap
+
 	// Dependencies are defined by the require section of go.mod files.
 	for modPath, modInfo := range modInfoMap {
 		// check if the module is a stable

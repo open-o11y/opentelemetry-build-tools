@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	tools "go.opentelemetry.io/tools"
+	"go.opentelemetry.io/tools"
 )
 
 var (
@@ -45,55 +45,49 @@ var prereleaseCmd = &cobra.Command{
 - 'make lint' and 'make ci' are called
 - Adds and commits changes to Git`,
 	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Using versioning file", versioningFile)
 
-		coreRepoRoot, err := tools.FindRepoRoot()
+		repoRoot, err := tools.ChangeToRepoRoot()
 		if err != nil {
-			log.Fatalf("unable to find repo root: %v", err)
+			log.Fatalf("unable to change to repo root: %v", err)
 		}
 
-		fmt.Println("Changing to root directory...")
-		os.Chdir(coreRepoRoot)
-
-		// get new version and mod tags to update
-		newVersion, newModPaths, newModTagNames, err := tools.VersionsAndModulesToUpdate(versioningFile, moduleSet, coreRepoRoot)
+		p, err := newPrerelease(versioningFile, moduleSet, repoRoot)
 		if err != nil {
-			log.Fatalf("unable to get modules to update: %v", err)
+			log.Fatalf("Error creating new prerelease struct: %v", err)
 		}
 
-		fmt.Println("Checking for tags", newModTagNames)
-
-		if err = verifyGitTagsDoNotAlreadyExist(newVersion, newModTagNames, coreRepoRoot); err != nil {
+		if err = p.verifyGitTagsDoNotAlreadyExist(); err != nil {
 			log.Fatalf("verifyGitTagsDoNotAlreadyExist failed: %v", err)
 		}
 
-		if err = verifyWorkingTreeClean(); err != nil {
+		if err = p.verifyWorkingTreeClean(); err != nil {
 			log.Fatalf("verifyWorkingTreeClean failed: %v", err)
 		}
 
-		if err = createPrereleaseBranch(moduleSet, newVersion, fromExistingBranch); err != nil {
+		if err = p.createPrereleaseBranch(fromExistingBranch); err != nil {
 			log.Fatalf("createPrereleaseBranch failed: %v", err)
 		}
 
-		modPathMap, err := tools.BuildModulePathMap(versioningFile, coreRepoRoot)
-
-		// TODO: what to do with version.go and references to otel.Version()
-		if err = updateVersionGo(); err != nil {
+		// TODO: this function currently does nothing, but could be updated to add version.go files
+		//  to directories.
+		if err = p.updateVersionGo(); err != nil {
 			log.Fatalf("updateVersionGo failed: %v", err)
 		}
 
-		if err = updateAllGoModFiles(newVersion, newModPaths, modPathMap); err != nil {
+		if err = p.updateAllGoModFiles(); err != nil {
 			log.Fatalf("updateAllGoModFiles failed: %v", err)
 		}
 
 		if skipMake {
 			fmt.Println("Skipping 'make lint'...")
 		} else {
-			if err = runMakeLint(); err != nil {
+			if err = p.runMakeLint(); err != nil {
 				log.Fatalf("runMakeLint failed: %v", err)
 			}
 		}
 
-		if err = commitChanges(newVersion, skipMake); err != nil {
+		if err = p.commitChanges(skipMake); err != nil {
 			log.Fatalf("commitChanges failed: %v", err)
 		}
 
@@ -130,10 +124,40 @@ func init() {
 	}
 }
 
+type prerelease struct {
+	tools.ModuleVersioningInfo
+	modSetToUpdate string
+	repoRoot       string
+	newVersion     string
+	modPaths       []tools.ModulePath
+	modTagNames    []tools.ModuleTagName
+}
+
+func newPrerelease(versioningFilename, modSetToUpdate, repoRoot string) (prerelease, error) {
+	baseVersionStruct, err := tools.NewModuleVersioningInfo(versioningFile, repoRoot)
+	if err != nil {
+		log.Fatalf("unable to load baseVersionStruct: %v", err)
+	}
+
+	// get new version and mod tags to update
+	newVersion, newModPaths, newModTagNames, err := tools.VersionsAndModulesToUpdate(versioningFile, moduleSet, repoRoot)
+	if err != nil {
+		log.Fatalf("unable to get modules to update: %v", err)
+	}
+
+	return prerelease{
+		ModuleVersioningInfo: baseVersionStruct,
+		modSetToUpdate:       moduleSet,
+		newVersion:           newVersion,
+		modPaths:             newModPaths,
+		modTagNames:          newModTagNames,
+	}, nil
+}
+
 // verifyGitTagsDoNotAlreadyExist checks if Git tags have already been created that match the specific module tag name
 // and version number for the modules being updated. If the tag already exists, an error is returned.
-func verifyGitTagsDoNotAlreadyExist(version string, modTagNames []tools.ModuleTagName, coreRepoRoot string) error {
-	modFullTags := tools.CombineModuleTagNamesAndVersion(modTagNames, version)
+func (p prerelease) verifyGitTagsDoNotAlreadyExist() error {
+	modFullTags := tools.CombineModuleTagNamesAndVersion(p.modTagNames, p.newVersion)
 
 	for _, newFullTag := range modFullTags {
 		cmd := exec.Command("git", "tag", "-l", newFullTag)
@@ -153,7 +177,7 @@ func verifyGitTagsDoNotAlreadyExist(version string, modTagNames []tools.ModuleTa
 
 // verifyWorkingTreeClean checks if the working tree is clean (i.e. running 'git diff --exit-code' gives exit code 0).
 // If the working tree is not clean, the git diff output is printed, and an error is returned.
-func verifyWorkingTreeClean() error {
+func (p prerelease) verifyWorkingTreeClean() error {
 	cmd := exec.Command("git", "diff", "--exit-code")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("working tree is not clean, can't proceed with the release process:\n\n%v",
@@ -164,8 +188,8 @@ func verifyWorkingTreeClean() error {
 	return nil
 }
 
-func createPrereleaseBranch(modSet, newVersion, fromExistingBranch string) error {
-	branchNameElements := []string{"pre_release", modSet, newVersion}
+func (p prerelease) createPrereleaseBranch(fromExistingBranch string) error {
+	branchNameElements := []string{"pre_release", p.modSetToUpdate, p.newVersion}
 	branchName := strings.Join(branchNameElements, "_")
 	fmt.Printf("git checkout -b %v %v\n", branchName, fromExistingBranch)
 	cmd := exec.Command("git", "checkout", "-b", branchName, fromExistingBranch)
@@ -177,57 +201,13 @@ func createPrereleaseBranch(modSet, newVersion, fromExistingBranch string) error
 	return nil
 }
 
-// TODO: figure out what to do with version.go file
-func updateVersionGo() error {
-	return nil
-}
-
-func filePathToRegex(fpath string) string {
-	replacedSlashes := strings.Replace(fpath, string(filepath.Separator), `\/`, -1)
-	replacedPeriods := strings.Replace(replacedSlashes, ".", `\.`, -1)
-	return replacedPeriods
-}
-
-// updateGoModVersions reads the fromFile (a go.mod file), replaces versions
-// for all specified modules in newModPaths, and writes the new go.mod to the toFile file.
-func updateGoModVersions(newVersion string, newModPaths []tools.ModulePath, modFilePath tools.ModuleFilePath) error {
-	newGoModFile, err := ioutil.ReadFile(string(modFilePath))
-	if err != nil {
-		panic(err)
-	}
-
-	for _, modPath := range newModPaths {
-		oldVersionRegex := filePathToRegex(string(modPath)) + ` v[0-9]*\.[0-9]*\.[0-9]`
-		r, err := regexp.Compile(oldVersionRegex)
-		if err != nil {
-			return fmt.Errorf("error compiling regex: %v", err)
-		}
-
-		newModVersionString := string(modPath) + " " + newVersion
-
-		newGoModFile = r.ReplaceAll(newGoModFile, []byte(newModVersionString))
-	}
-
-	// once all module versions have been updated, overwrite the go.mod file
-	ioutil.WriteFile(string(modFilePath), newGoModFile, 0644)
-
-	return nil
-}
-
-// updateAllGoModFiles updates ALL modules' requires sections to use the newVersion number
-// for the modules given in newModPaths.
-func updateAllGoModFiles(newVersion string, newModPaths []tools.ModulePath, modPathMap tools.ModulePathMap) error {
-	fmt.Println("Updating all module versions in go.mod files...")
-	for _, modFilePath := range modPathMap {
-		if err := updateGoModVersions(newVersion, newModPaths, modFilePath); err != nil {
-			return fmt.Errorf("could not update module versions in file %v: %v", modFilePath, err)
-		}
-	}
+// TODO: updateVersionGo may be implemented to update any hard-coded values within version.go files as needed.
+func (p prerelease) updateVersionGo() error {
 	return nil
 }
 
 // runMakeLint runs 'make lint' to automatically update go.sum files.
-func runMakeLint() error {
+func (p prerelease) runMakeLint() error {
 	fmt.Println("Updating go.sum with 'make lint'...")
 
 	cmd := exec.Command("make", "lint")
@@ -238,8 +218,8 @@ func runMakeLint() error {
 	return nil
 }
 
-func commitChanges(newVersion string, skipMake bool) error {
-	commitMessage := "Prepare for releasing " + newVersion
+func (p prerelease) commitChanges(skipMake bool) error {
+	commitMessage := "Prepare for releasing " + p.newVersion
 
 	// add changes to git
 	cmd := exec.Command("git", "add", ".")
@@ -275,4 +255,48 @@ func commitChanges(newVersion string, skipMake bool) error {
 	os.Stdout.Write(output)
 
 	return nil
+}
+
+// updateGoModVersions reads the fromFile (a go.mod file), replaces versions
+// for all specified modules in newModPaths, and writes the new go.mod to the toFile file.
+func (p prerelease) updateGoModVersions(modFilePath tools.ModuleFilePath) error {
+	newGoModFile, err := ioutil.ReadFile(string(modFilePath))
+	if err != nil {
+		panic(err)
+	}
+
+	for _, modPath := range p.modPaths {
+		oldVersionRegex := filePathToRegex(string(modPath)) + ` v[0-9]*\.[0-9]*\.[0-9]`
+		r, err := regexp.Compile(oldVersionRegex)
+		if err != nil {
+			return fmt.Errorf("error compiling regex: %v", err)
+		}
+
+		newModVersionString := string(modPath) + " " + p.newVersion
+
+		newGoModFile = r.ReplaceAll(newGoModFile, []byte(newModVersionString))
+	}
+
+	// once all module versions have been updated, overwrite the go.mod file
+	ioutil.WriteFile(string(modFilePath), newGoModFile, 0644)
+
+	return nil
+}
+
+// updateAllGoModFiles updates ALL modules' requires sections to use the newVersion number
+// for the modules given in newModPaths.
+func (p prerelease) updateAllGoModFiles() error {
+	fmt.Println("Updating all module versions in go.mod files...")
+	for _, modFilePath := range p.ModPathMap {
+		if err := p.updateGoModVersions(modFilePath); err != nil {
+			return fmt.Errorf("could not update module versions in file %v: %v", modFilePath, err)
+		}
+	}
+	return nil
+}
+
+func filePathToRegex(fpath string) string {
+	replacedSlashes := strings.Replace(fpath, string(filepath.Separator), `\/`, -1)
+	replacedPeriods := strings.Replace(replacedSlashes, ".", `\.`, -1)
+	return replacedPeriods
 }

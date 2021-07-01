@@ -20,7 +20,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -268,7 +267,7 @@ func (p prerelease) updateGoModVersions(modFilePath tools.ModuleFilePath) error 
 	}
 
 	for _, modPath := range p.modPaths {
-		oldVersionRegex := filePathToRegex(string(modPath)) + ` v[0-9]*\.[0-9]*\.[0-9]`
+		oldVersionRegex := regexp.QuoteMeta(string(modPath)) + tools.SemverRegex
 		r, err := regexp.Compile(oldVersionRegex)
 		if err != nil {
 			return fmt.Errorf("error compiling regex: %v", err)
@@ -295,10 +294,4 @@ func (p prerelease) updateAllGoModFiles() error {
 		}
 	}
 	return nil
-}
-
-func filePathToRegex(fpath string) string {
-	replacedSlashes := strings.Replace(fpath, string(filepath.Separator), `\/`, -1)
-	replacedPeriods := strings.Replace(replacedSlashes, ".", `\.`, -1)
-	return replacedPeriods
 }

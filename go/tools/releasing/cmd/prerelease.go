@@ -160,15 +160,20 @@ func newPrerelease(versioningFilename, modSetToUpdate, repoRoot string) (prerele
 func (p prerelease) verifyGitTagsDoNotAlreadyExist() error {
 	modFullTags := tools.CombineModuleTagNamesAndVersion(p.modTagNames, p.newVersion)
 
-	for _, newFullTag := range modFullTags {
-		cmd := exec.Command("git", "tag", "-l", newFullTag)
-		output, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("could not execute git tag -l %v: %v", newFullTag, err)
-		}
+	cmd := exec.Command("git", "tag")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("could not execute git tag: %v", err)
+	}
 
-		outputTag := strings.TrimSpace(string(output))
-		if outputTag == newFullTag {
+	existingTags := map[string]bool{}
+
+	for _, tag := range strings.Split(string(output), "\n") {
+		existingTags[strings.TrimSpace(tag)] = true
+	}
+
+	for _, newFullTag := range modFullTags {
+		if existingTags[newFullTag] {
 			return fmt.Errorf("git tag already exists for %v", newFullTag)
 		}
 	}

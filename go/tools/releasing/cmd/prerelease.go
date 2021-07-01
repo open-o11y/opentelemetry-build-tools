@@ -273,7 +273,7 @@ func (p prerelease) updateGoModVersions(modFilePath tools.ModuleFilePath) error 
 	}
 
 	for _, modPath := range p.modPaths {
-		oldVersionRegex := filePathToRegex(string(modPath)) + ` v[0-9]*\.[0-9]*\.[0-9]`
+		oldVersionRegex := filePathToRegex(string(modPath)) + tools.SemverRegex
 		r, err := regexp.Compile(oldVersionRegex)
 		if err != nil {
 			return fmt.Errorf("error compiling regex: %v", err)

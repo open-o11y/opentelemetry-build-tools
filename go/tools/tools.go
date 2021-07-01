@@ -33,7 +33,7 @@ const (
 )
 
 type ModuleVersioning struct {
-	ModSetMap ModuleSetMap
+	ModSetMap  ModuleSetMap
 	ModPathMap ModulePathMap
 	ModInfoMap ModuleInfoMap
 }
@@ -79,8 +79,8 @@ type ModuleSetMap map[string]ModuleSet
 
 // ModuleSet holds the version that the specified modules within the set will have.
 type ModuleSet struct {
-	Version	string       `mapstructure:"version"`
-	Modules	[]ModulePath `mapstructure:"modules"`
+	Version string       `mapstructure:"version"`
+	Modules []ModulePath `mapstructure:"modules"`
 }
 
 // ModulePath holds the module import path, such as "go.opentelemetry.io/otel".
@@ -245,7 +245,7 @@ func CombineModuleTagNamesAndVersion(modTagNames []ModuleTagName, version string
 func ModulePathsToTagNames(modPaths []ModulePath, modPathMap ModulePathMap, repoRoot string) ([]ModuleTagName, error) {
 	modFilePaths, err := modulePathsToFilePaths(modPaths, modPathMap)
 	if err != nil {
-		return  nil, fmt.Errorf("could not convert module paths to file paths: %v", err)
+		return nil, fmt.Errorf("could not convert module paths to file paths: %v", err)
 	}
 
 	modTagNames, err := moduleFilePathsToTagNames(modFilePaths, repoRoot)

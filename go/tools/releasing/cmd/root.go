@@ -50,19 +50,15 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVarP(&versioningFile, "versioning-file", "v", "",
-		"Path to versioning file that contains definitions of all module sets. "+
-			fmt.Sprintf("If unspecified will default to (RepoRoot)/%v.%v",
-				defaultVersionsConfigName, defaultVersionsConfigType))
-
-	if versioningFile == "" {
-		repoRoot, err := tools.FindRepoRoot()
-		if err != nil {
-			log.Fatalf("Could not find repo root: %v", err)
-		}
-		versioningFile = filepath.Join(repoRoot,
-			fmt.Sprintf("%v.%v", defaultVersionsConfigName, defaultVersionsConfigType))
+	repoRoot, err := tools.FindRepoRoot()
+	if err != nil {
+		log.Fatalf("Could not find repo root: %v", err)
 	}
+	versioningFile = filepath.Join(repoRoot,
+		fmt.Sprintf("%v.%v", defaultVersionsConfigName, defaultVersionsConfigType))
+	
+	rootCmd.PersistentFlags().StringVarP(&versioningFile, "versioning-file", "v", versioningFile,
+		"Path to versioning file that contains definitions of all module sets. ")
 
 	rootCmd.PersistentFlags().StringVarP(&moduleSetName, "module-set-name", "m", "",
 		"Name of module set whose version is being changed. Must be listed in the module set versioning YAML.",

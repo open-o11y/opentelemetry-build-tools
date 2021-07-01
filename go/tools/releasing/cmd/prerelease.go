@@ -304,6 +304,6 @@ func (p prerelease) updateAllGoModFiles() error {
 
 func filePathToRegex(fpath string) string {
 	replacedSlashes := strings.Replace(fpath, string(filepath.Separator), `\/`, -1)
-	pathRegex := regexp.QuoteMeta(replacedSlashes)
-	return pathRegex
+	replacedPeriods := strings.Replace(replacedSlashes, ".", `\.`, -1)
+	return replacedPeriods
 }
